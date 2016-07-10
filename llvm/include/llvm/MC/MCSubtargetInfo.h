@@ -267,6 +267,14 @@ public:
   /// prefetching.
   ///
   virtual unsigned getMinPrefetchStride() const;
+
+  ArrayRef<SubtargetSubTypeKV> getCPUTable() const {
+    return ProcDesc;
+  }
+
+  ArrayRef<SubtargetFeatureKV> getFeatureTable() const {
+    return ProcFeatures;
+  }
 };
 
 } // end namespace llvm
