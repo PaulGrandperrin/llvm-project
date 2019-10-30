@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/IR/Metadata.h"
 #include "LLVMContextImpl.h"
 #include "MetadataImpl.h"
 #include "SymbolTableListTraitsImpl.h"
@@ -37,8 +38,8 @@
 #include "llvm/IR/GlobalObject.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/TrackingMDRef.h"
 #include "llvm/IR/Type.h"
@@ -1261,7 +1262,23 @@ void Instruction::setMetadata(unsigned KindID, MDNode *Node) {
 void Instruction::setAAMetadata(const AAMDNodes &N) {
   setMetadata(LLVMContext::MD_tbaa, N.TBAA);
   setMetadata(LLVMContext::MD_alias_scope, N.Scope);
-  setMetadata(LLVMContext::MD_noalias, N.NoAlias);
+  if (!N.NoAliasSideChannel)
+    setMetadata(LLVMContext::MD_noalias, N.NoAlias);
+  // else postpone until setAAMetadataNoAliasSideChannel
+}
+
+void Instruction::setAAMetadataNoAliasSideChannel(const AAMDNodes &N) {
+  // It is not correct to always propagate the noalias_sidechannel.
+  // 'setAAMetadata' must already have been called !
+  if (N.NoAliasSideChannel) {
+    // postponed from setAAMetadata
+    setMetadata(LLVMContext::MD_noalias, N.NoAlias);
+    if (LoadInst *LI = dyn_cast<LoadInst>(this)) {
+      LI->setNoaliasSideChannelOperand(N.NoAliasSideChannel);
+    } else if (StoreInst *SI = dyn_cast<StoreInst>(this)) {
+      SI->setNoaliasSideChannelOperand(N.NoAliasSideChannel);
+    }
+  }
 }
 
 MDNode *Instruction::getMetadataImpl(unsigned KindID) const {

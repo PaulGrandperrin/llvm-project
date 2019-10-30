@@ -642,16 +642,19 @@ public:
 /// memory access used by the alias-analysis infrastructure.
 struct AAMDNodes {
   explicit AAMDNodes(MDNode *T = nullptr, MDNode *S = nullptr,
-                     MDNode *N = nullptr)
-      : TBAA(T), Scope(S), NoAlias(N) {}
+                     MDNode *N = nullptr, Value *NSC = nullptr)
+      : TBAA(T), Scope(S), NoAlias(N), NoAliasSideChannel(NSC) {}
 
   bool operator==(const AAMDNodes &A) const {
-    return TBAA == A.TBAA && Scope == A.Scope && NoAlias == A.NoAlias;
+    return TBAA == A.TBAA && Scope == A.Scope && NoAlias == A.NoAlias &&
+           NoAliasSideChannel == A.NoAliasSideChannel;
   }
 
   bool operator!=(const AAMDNodes &A) const { return !(*this == A); }
 
-  explicit operator bool() const { return TBAA || Scope || NoAlias; }
+  explicit operator bool() const {
+    return TBAA || Scope || NoAlias || NoAliasSideChannel;
+  }
 
   /// The tag for type-based alias analysis.
   MDNode *TBAA;
@@ -661,6 +664,9 @@ struct AAMDNodes {
 
   /// The tag specifying the noalias scope.
   MDNode *NoAlias;
+
+  /// The NoAlias SideChannel pointer path
+  Value *NoAliasSideChannel;
 
   /// Given two sets of AAMDNodes that apply to the same pointer,
   /// give the best AAMDNodes that are compatible with both (i.e. a set of
@@ -672,6 +678,9 @@ struct AAMDNodes {
     Result.TBAA = Other.TBAA == TBAA ? TBAA : nullptr;
     Result.Scope = Other.Scope == Scope ? Scope : nullptr;
     Result.NoAlias = Other.NoAlias == NoAlias ? NoAlias : nullptr;
+    Result.NoAliasSideChannel = Other.NoAliasSideChannel == NoAliasSideChannel
+                                    ? NoAliasSideChannel
+                                    : nullptr;
     return Result;
   }
 };
@@ -692,7 +701,8 @@ struct DenseMapInfo<AAMDNodes> {
   static unsigned getHashValue(const AAMDNodes &Val) {
     return DenseMapInfo<MDNode *>::getHashValue(Val.TBAA) ^
            DenseMapInfo<MDNode *>::getHashValue(Val.Scope) ^
-           DenseMapInfo<MDNode *>::getHashValue(Val.NoAlias);
+           DenseMapInfo<MDNode *>::getHashValue(Val.NoAlias) ^
+           DenseMapInfo<Value *>::getHashValue(Val.NoAliasSideChannel);
   }
 
   static bool isEqual(const AAMDNodes &LHS, const AAMDNodes &RHS) {
@@ -1425,6 +1435,32 @@ public:
 // Create wrappers for C Binding types (see CBindingWrapping.h).
 DEFINE_ISA_CONVERSION_FUNCTIONS(NamedMDNode, LLVMNamedMDNodeRef)
 
+/// This is a simple wrapper around an MDNode which provides a higher-level
+/// interface by hiding the details of how alias analysis information is encoded
+/// in its operands.
+class AliasScopeNode {
+  const MDNode *Node = nullptr;
+
+public:
+  AliasScopeNode() = default;
+  explicit AliasScopeNode(const MDNode *N) : Node(N) {}
+
+  /// Get the MDNode for this AliasScopeNode.
+  const MDNode *getNode() const { return Node; }
+
+  /// Get the MDNode for this AliasScopeNode's domain.
+  const MDNode *getDomain() const {
+    if (Node->getNumOperands() < 2)
+      return nullptr;
+    return dyn_cast_or_null<MDNode>(Node->getOperand(1));
+  }
+  StringRef getName() const {
+    if (Node->getNumOperands() > 2)
+      if (MDString *N = dyn_cast_or_null<MDString>(Node->getOperand(2)))
+        return N->getString();
+    return StringRef();
+  }
+};
 } // end namespace llvm
 
 #endif // LLVM_IR_METADATA_H

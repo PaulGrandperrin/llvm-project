@@ -22,7 +22,6 @@
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
-#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -33,8 +32,10 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
+#include "llvm/Transforms/Utils/NoAliasUtils.h"
 #include "llvm/Transforms/Utils/SimplifyIndVar.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
 using namespace llvm;
@@ -598,6 +599,12 @@ LoopUnrollResult llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
                          << DIL->getFilename() << " Line: " << DIL->getLine());
           }
 
+  // Phase1: Identify what noalias metadata is inside the loop: if it is inside
+  // the loop, the associated metadata must be clone for each iteration.
+  SmallVector<MetadataAsValue *, 6> LoopLocalNoAliasDeclScopes;
+  llvm::identifyNoAliasScopesToClone(L->getBlocks(),
+                                     LoopLocalNoAliasDeclScopes);
+
   for (unsigned It = 1; It != ULO.Count; ++It) {
     std::vector<BasicBlock*> NewBlocks;
     SmallDenseMap<const Loop *, Loop *, 4> NewLoops;
@@ -688,6 +695,16 @@ LoopUnrollResult llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
           if (II->getIntrinsicID() == Intrinsic::assume)
             AC->registerAssumption(II);
       }
+    }
+
+    {
+      // Phase2: identify what other metadata depends on the cloned version
+      // Phase3: after cloning, replace the metadata with the corrected version
+      // for both memory instructions and noalias intrinsics
+      std::string ext = "It";
+      ext += utostr(It);
+      cloneAndAdaptNoAliasScopes(LoopLocalNoAliasDeclScopes, NewBlocks,
+                                 Header->getContext(), ext);
     }
   }
 

@@ -2752,9 +2752,27 @@ Instruction *InstCombiner::visitExtractValueInst(ExtractValueInst &EV) {
       AAMDNodes Nodes;
       L->getAAMetadata(Nodes);
       NL->setAAMetadata(Nodes);
+      NL->setAAMetadataNoAliasSideChannel(Nodes);
       // Returning the load directly will cause the main loop to insert it in
-      // the wrong spot, so use replaceInstUsesWith().
-      return replaceInstUsesWith(EV, NL);
+      // the wrong spot, so use ReplaceInstUsesWith().
+      {
+        for (auto mdtag : {
+             LLVMContext::MD_dbg,
+             LLVMContext::MD_tbaa,
+             LLVMContext::MD_prof,
+             LLVMContext::MD_fpmath,
+             LLVMContext::MD_tbaa_struct,
+             LLVMContext::MD_invariant_load,
+             LLVMContext::MD_alias_scope,
+             LLVMContext::MD_noalias,
+             LLVMContext::MD_nontemporal,
+             LLVMContext::MD_mem_parallel_loop_access }) {
+          if(auto *MD = L->getMetadata(mdtag)) {
+            NL->setMetadata(mdtag, MD);
+          }
+        }
+        return replaceInstUsesWith(EV, NL);
+      }
     }
   // We could simplify extracts from other values. Note that nested extracts may
   // already be simplified implicitly by the above: extract (extract (insert) )

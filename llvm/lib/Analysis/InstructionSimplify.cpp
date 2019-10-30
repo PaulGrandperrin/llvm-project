@@ -35,6 +35,7 @@
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/ValueHandle.h"
@@ -5130,6 +5131,13 @@ static Value *simplifyBinaryIntrinsic(Function *F, Value *Op0, Value *Op1,
     // TODO: maxnum(nnan ninf x, -flt_max) -> x
     break;
   }
+  case Intrinsic::noalias_arg_guard: {
+    // Only follow the plain path if undefined. Do not propagate null, that
+    // would incorrectly omit noalias information.
+    if (isa<UndefValue>(Op0))
+      return Op0;
+    break;
+  }
   default:
     break;
   }
@@ -5137,8 +5145,29 @@ static Value *simplifyBinaryIntrinsic(Function *F, Value *Op0, Value *Op1,
   return nullptr;
 }
 
-static Value *simplifyIntrinsic(CallBase *Call, const SimplifyQuery &Q) {
+static Value *simplifySideNoalias(const Value *V) {
+  const IntrinsicInst *II = cast<IntrinsicInst>(V);
+  assert(II->getIntrinsicID() == Intrinsic::side_noalias);
 
+  // Only follow the plain path if undefined. Do not propagate null, that
+  // would incorrectly omit noalias information.
+  Value *Op0 = II->getOperand(0);
+  if (isa<UndefValue>(Op0)) {
+    return Op0;
+  }
+
+  // Check for compatibility: side_noalias(side_noalias) -> side_noalias
+  if (llvm::IntrinsicInst *DepII = dyn_cast<IntrinsicInst>(Op0)) {
+    if (DepII->getIntrinsicID() == Intrinsic::side_noalias) {
+      if (llvm::areSideNoaliasCompatible(DepII, II)) {
+        return DepII;
+      }
+    }
+  }
+  return nullptr;
+}
+
+static Value *simplifyIntrinsic(CallBase *Call, const SimplifyQuery &Q) {
   // Intrinsics with no operands have some kind of side effect. Don't simplify.
   unsigned NumOperands = Call->getNumArgOperands();
   if (!NumOperands)
@@ -5194,6 +5223,18 @@ static Value *simplifyIntrinsic(CallBase *Call, const SimplifyQuery &Q) {
     if (Value *V = simplifyFPOp({ Op0, Op1, Op2 }))
       return V;
     return nullptr;
+  }
+  case Intrinsic::noalias:
+  case Intrinsic::noalias_copy_guard: {
+    // Only follow the plain path if undefined. Do not propagate null, that
+    // would incorrectly omit noalias information.
+    if (auto Op0 = dyn_cast<UndefValue>(Call->getArgOperand(0))) {
+      return Op0;
+    }
+    return nullptr;
+  }
+  case Intrinsic::side_noalias: {
+    return simplifySideNoalias(Call);
   }
   default:
     return nullptr;

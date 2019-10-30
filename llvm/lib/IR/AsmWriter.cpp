@@ -4008,14 +4008,29 @@ void AssemblyWriter::printInstruction(const Instruction &I) {
     }
     Out << ", ";
     TypePrinter.print(I.getType(), Out);
-  } else if (Operand) {   // Print the normal way.
+  } else if (const auto *LI = dyn_cast<LoadInst>(&I)) {
+    Out << ' ';
+    TypePrinter.print(LI->getType(), Out);
+    Out << ", ";
+    writeOperand(I.getOperand(0), true);
+    if (LI->hasNoaliasSideChannelOperand()) {
+      Out << ", noalias_sidechannel ";
+      writeOperand(LI->getNoaliasSideChannelOperand(), true);
+    }
+  } else if (const auto *SI = dyn_cast<StoreInst>(&I)) {
+    Out << ' ';
+    writeOperand(I.getOperand(0), true);
+    Out << ", ";
+    writeOperand(I.getOperand(1), true);
+
+    if (SI->hasNoaliasSideChannelOperand()) {
+      Out << ", noalias_sidechannel ";
+      writeOperand(SI->getNoaliasSideChannelOperand(), true);
+    }
+  } else if (Operand) { // Print the normal way.
     if (const auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
       Out << ' ';
       TypePrinter.print(GEP->getSourceElementType(), Out);
-      Out << ',';
-    } else if (const auto *LI = dyn_cast<LoadInst>(&I)) {
-      Out << ' ';
-      TypePrinter.print(LI->getType(), Out);
       Out << ',';
     }
 
@@ -4026,8 +4041,7 @@ void AssemblyWriter::printInstruction(const Instruction &I) {
     Type *TheType = Operand->getType();
 
     // Select, Store and ShuffleVector always print all types.
-    if (isa<SelectInst>(I) || isa<StoreInst>(I) || isa<ShuffleVectorInst>(I)
-        || isa<ReturnInst>(I)) {
+    if (isa<SelectInst>(I) || isa<ShuffleVectorInst>(I) || isa<ReturnInst>(I)) {
       PrintAllTypes = true;
     } else {
       for (unsigned i = 1, E = I.getNumOperands(); i != E; ++i) {

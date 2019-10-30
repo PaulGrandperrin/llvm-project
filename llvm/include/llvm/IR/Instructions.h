@@ -166,7 +166,7 @@ private:
 
 /// An instruction for reading from memory. This uses the SubclassData field in
 /// Value to store whether or not the load is volatile.
-class LoadInst : public UnaryInstruction {
+class LoadInst : public Instruction {
   void AssertOK();
 
 protected:
@@ -228,6 +228,16 @@ public:
            AtomicOrdering Order, SyncScope::ID SSID, BasicBlock *InsertAtEnd)
       : LoadInst(Ptr->getType()->getPointerElementType(), Ptr, NameStr,
                  isVolatile, Align, Order, SSID, InsertAtEnd) {}
+
+  ~LoadInst() {
+    // FIXME: needed by operator delete
+    setLoadInstNumOperands(2);
+  }
+  // allocate space for exactly two operands
+  void *operator new(size_t s) { return User::operator new(s, 2); }
+
+  /// Transparently provide more efficient getOperand methods.
+  DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
 
   /// Return true if this is a load from a volatile memory location.
   bool isVolatile() const { return getSubclassDataFromInstruction() & 1; }
@@ -296,6 +306,23 @@ public:
     return getPointerOperandType()->getPointerAddressSpace();
   }
 
+  bool hasNoaliasSideChannelOperand() const { return getNumOperands() == 2; }
+  Value *getNoaliasSideChannelOperand() const {
+    assert(hasNoaliasSideChannelOperand() && "we need a noalias_sidechannel");
+    return getOperand(1);
+  }
+  static unsigned getNoaliasSideChannelOperandIndex() { return 1U; }
+  void setNoaliasSideChannelOperand(Value *SideChannel) {
+    assert(SideChannel && "Needs a side channel");
+    setLoadInstNumOperands(2);
+    setOperand(1, SideChannel);
+  }
+  void removeNoaliasSideChannelOperand() {
+    assert(hasNoaliasSideChannelOperand() && "nothing to remove");
+    // make sure 'uses' are updated
+    setOperand(getNoaliasSideChannelOperandIndex(), nullptr);
+    setLoadInstNumOperands(1);
+  }
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static bool classof(const Instruction *I) {
     return I->getOpcode() == Instruction::Load;
@@ -316,6 +343,11 @@ private:
   /// own field.
   SyncScope::ID SSID;
 };
+
+template <>
+struct OperandTraits<LoadInst> : public OptionalOperandTraits<LoadInst, 2> {};
+
+DEFINE_TRANSPARENT_OPERAND_ACCESSORS(LoadInst, Value)
 
 //===----------------------------------------------------------------------===//
 //                                StoreInst Class
@@ -347,10 +379,11 @@ public:
   StoreInst(Value *Val, Value *Ptr, bool isVolatile, MaybeAlign Align,
             AtomicOrdering Order, SyncScope::ID SSID, BasicBlock *InsertAtEnd);
 
-  // allocate space for exactly two operands
-  void *operator new(size_t s) {
-    return User::operator new(s, 2);
+  ~StoreInst() {
+    // FIXME: needed by operator delete
+    setStoreInstNumOperands(3);
   }
+  void *operator new(size_t s) { return User::operator new(s, 3); }
 
   /// Return true if this is a store to a volatile memory location.
   bool isVolatile() const { return getSubclassDataFromInstruction() & 1; }
@@ -425,6 +458,23 @@ public:
     return getPointerOperandType()->getPointerAddressSpace();
   }
 
+  bool hasNoaliasSideChannelOperand() const { return getNumOperands() == 3; }
+  Value *getNoaliasSideChannelOperand() const {
+    assert(hasNoaliasSideChannelOperand() && "we need a noalias_sidechannel");
+    return getOperand(2);
+  }
+  static unsigned getNoaliasSideChannelOperandIndex() { return 2U; }
+  void setNoaliasSideChannelOperand(Value *SideChannel) {
+    assert(SideChannel && "Needs a side channel");
+    setStoreInstNumOperands(3);
+    setOperand(2, SideChannel);
+  }
+  void removeNoaliasSideChannelOperand() {
+    assert(hasNoaliasSideChannelOperand() && "nothing to remove");
+    // make sure 'uses' are updated
+    setOperand(getNoaliasSideChannelOperandIndex(), nullptr);
+    setStoreInstNumOperands(2);
+  }
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static bool classof(const Instruction *I) {
     return I->getOpcode() == Instruction::Store;
@@ -447,8 +497,7 @@ private:
 };
 
 template <>
-struct OperandTraits<StoreInst> : public FixedNumOperandTraits<StoreInst, 2> {
-};
+struct OperandTraits<StoreInst> : public OptionalOperandTraits<StoreInst, 3> {};
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(StoreInst, Value)
 

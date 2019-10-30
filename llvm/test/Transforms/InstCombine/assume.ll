@@ -351,6 +351,8 @@ declare void @llvm.dbg.value(metadata, metadata, metadata)
 !7 = !{i32 1, !"wchar_size", i32 4}
 !8 = !{i32 7, !"PIC Level", i32 2}
 !9 = !DILocation(line: 0, column: 0, scope: !2)
+!10 = !{!10, !"some domain"}
+!11 = !{!11, !10, !"some scope"}
 
 
 attributes #0 = { nounwind uwtable }

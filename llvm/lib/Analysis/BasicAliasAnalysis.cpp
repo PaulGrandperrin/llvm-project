@@ -853,10 +853,15 @@ AliasResult BasicAAResult::alias(const MemoryLocation &LocA,
   if (CacheIt != AAQI.AliasCache.end())
     return CacheIt->second;
 
+  ++RecurseLevel;
   AliasResult Alias = aliasCheck(LocA.Ptr, LocA.Size, LocA.AATags, LocB.Ptr,
                                  LocB.Size, LocB.AATags, AAQI);
 
-  VisitedPhiBBs.clear();
+  // protect cache against recursive calls from ScopedNoAliasAA: only clean up
+  // at the top level
+  if (--RecurseLevel == 0) {
+    VisitedPhiBBs.clear();
+  }
   return Alias;
 }
 
@@ -1740,8 +1745,8 @@ AliasResult BasicAAResult::aliasCheck(const Value *V1, LocationSize V1Size,
     return NoAlias;
 
   // Strip off any casts if they exist.
-  V1 = V1->stripPointerCastsAndInvariantGroups();
-  V2 = V2->stripPointerCastsAndInvariantGroups();
+  V1 = V1->stripPointerCastsAndInvariantGroupsAndNoAliasIntr();
+  V2 = V2->stripPointerCastsAndInvariantGroupsAndNoAliasIntr();
 
   // If V1 or V2 is undef, the result is NoAlias because we can always pick a
   // value for undef that aliases nothing in the program.

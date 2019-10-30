@@ -334,12 +334,15 @@ class Value;
   /// the specified value, returning the original object being addressed. Note
   /// that the returned value has pointer type if the specified value does. If
   /// the MaxLookup value is non-zero, it limits the number of instructions to
-  /// be stripped off.
+  /// be stripped off. If a NoAlias vector is provided, it is filled with any
+  /// llvm.noalias intrinsics looked through to find the underlying object.
   Value *GetUnderlyingObject(Value *V, const DataLayout &DL,
-                             unsigned MaxLookup = 6);
-  inline const Value *GetUnderlyingObject(const Value *V, const DataLayout &DL,
-                                          unsigned MaxLookup = 6) {
-    return GetUnderlyingObject(const_cast<Value *>(V), DL, MaxLookup);
+                             unsigned MaxLookup = 6,
+                             SmallVectorImpl<Instruction *> *NoAlias = nullptr);
+  inline const Value *GetUnderlyingObject(const Value *V,
+                 const DataLayout &DL, unsigned MaxLookup = 6,
+                 SmallVectorImpl<Instruction *> *NoAlias = nullptr) {
+    return GetUnderlyingObject(const_cast<Value *>(V), DL, MaxLookup, NoAlias);
   }
 
   /// This method is similar to GetUnderlyingObject except that it can
@@ -369,11 +372,14 @@ class Value;
   ///
   /// Since A[i] and A[i-1] are independent pointers, getUnderlyingObjects
   /// should not assume that Curr and Prev share the same underlying object thus
-  /// it shouldn't look through the phi above.
+  /// it shouldn't look through the phi above. If a NoAlias vector is provided,
+  /// it is filled with any llvm.noalias intrinsics looked through to find the
+  /// underlying objects.
   void GetUnderlyingObjects(const Value *V,
                             SmallVectorImpl<const Value *> &Objects,
                             const DataLayout &DL, LoopInfo *LI = nullptr,
-                            unsigned MaxLookup = 6);
+                            unsigned MaxLookup = 6,
+                            SmallVectorImpl<Instruction *> *NoAlias = nullptr);
 
   /// This is a wrapper around GetUnderlyingObjects and adds support for basic
   /// ptrtoint+arithmetic+inttoptr sequences.

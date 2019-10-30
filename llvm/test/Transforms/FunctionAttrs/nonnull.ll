@@ -579,5 +579,15 @@ define void @make_live(i32* nonnull dereferenceable(8) %a) {
   ret void
 }
 
+; Return a pointer trivially nonnull (argument attribute) through a llvm.noalias.arg.guard
+; BOTH: define nonnull i8* @test_noalias_arg_guard
+define i8* @test_noalias_arg_guard(i8* nonnull %p) {
+  %ret = tail call i8* @llvm.noalias.arg.guard.p0i8.p0i8(i8* %p, i8* %p)
+  ret i8* %p
+}
+
+; Function Attrs: nounwind readnone
+declare i8* @llvm.noalias.arg.guard.p0i8.p0i8(i8*, i8*) nounwind readnone
+
 attributes #0 = { "null-pointer-is-valid"="true" }
 attributes #1 = { nounwind willreturn}

@@ -462,10 +462,20 @@ static LoadInst *combineLoadToNewType(InstCombiner &IC, LoadInst &LI, Type *NewT
         NewPtr->getType()->getPointerAddressSpace() == AS))
     NewPtr = IC.Builder.CreateBitCast(Ptr, NewTy->getPointerTo(AS));
 
+  Value *NewSidePtr = nullptr;
+  if (LI.hasNoaliasSideChannelOperand()) {
+    NewSidePtr = IC.Builder.CreateBitCast(LI.getNoaliasSideChannelOperand(),
+                                          NewTy->getPointerTo(AS));
+  }
+
   LoadInst *NewLoad = IC.Builder.CreateAlignedLoad(
       NewTy, NewPtr, LI.getAlignment(), LI.isVolatile(), LI.getName() + Suffix);
   NewLoad->setAtomic(LI.getOrdering(), LI.getSyncScopeID());
   copyMetadataForLoad(*NewLoad, LI);
+  if (LI.hasNoaliasSideChannelOperand()) {
+    assert(NewSidePtr);
+    NewLoad->setNoaliasSideChannelOperand(NewSidePtr);
+  }
   return NewLoad;
 }
 
@@ -480,6 +490,12 @@ static StoreInst *combineStoreToNewValue(InstCombiner &IC, StoreInst &SI, Value 
   unsigned AS = SI.getPointerAddressSpace();
   SmallVector<std::pair<unsigned, MDNode *>, 8> MD;
   SI.getAllMetadata(MD);
+
+  Value *NewSidePtr = nullptr;
+  if (SI.hasNoaliasSideChannelOperand()) {
+    NewSidePtr = IC.Builder.CreateBitCast(SI.getNoaliasSideChannelOperand(),
+                                          V->getType()->getPointerTo(AS));
+  }
 
   StoreInst *NewStore = IC.Builder.CreateAlignedStore(
       V, IC.Builder.CreateBitCast(Ptr, V->getType()->getPointerTo(AS)),
@@ -519,6 +535,11 @@ static StoreInst *combineStoreToNewValue(InstCombiner &IC, StoreInst &SI, Value 
       // These don't apply for stores.
       break;
     }
+  }
+
+  if (SI.hasNoaliasSideChannelOperand()) {
+    assert(NewSidePtr);
+    NewStore->setNoaliasSideChannelOperand(NewSidePtr);
   }
 
   return NewStore;
@@ -602,6 +623,10 @@ static Instruction *combineLoadToOperationType(InstCombiner &IC, LoadInst &LI) {
       // Replace all the stores with stores of the newly loaded value.
       for (auto UI = LI.user_begin(), UE = LI.user_end(); UI != UE;) {
         auto *SI = cast<StoreInst>(*UI++);
+        // skip the noalias_sidechannel
+        if ((UI != UE) && (*UI == SI))
+          ++UI;
+
         IC.Builder.SetInsertPoint(SI);
         combineStoreToNewValue(IC, *SI, NewLoad);
         IC.eraseInstFromFunction(*SI);
@@ -687,6 +712,7 @@ static Instruction *unpackLoadToAggregate(InstCombiner &IC, LoadInst &LI) {
       AAMDNodes AAMD;
       LI.getAAMetadata(AAMD);
       L->setAAMetadata(AAMD);
+      L->setAAMetadataNoAliasSideChannel(AAMD);
       V = IC.Builder.CreateInsertValue(V, L, i);
     }
 
@@ -737,6 +763,7 @@ static Instruction *unpackLoadToAggregate(InstCombiner &IC, LoadInst &LI) {
       AAMDNodes AAMD;
       LI.getAAMetadata(AAMD);
       L->setAAMetadata(AAMD);
+      L->setAAMetadataNoAliasSideChannel(AAMD);
       V = IC.Builder.CreateInsertValue(V, L, i);
       Offset += EltSize;
     }
@@ -948,6 +975,13 @@ static bool canSimplifyNullLoadOrGEP(LoadInst &LI, Value *Op) {
 
 Instruction *InstCombiner::visitLoadInst(LoadInst &LI) {
   Value *Op = LI.getOperand(0);
+
+  if (LI.hasNoaliasSideChannelOperand() &&
+      (LI.getNoaliasSideChannelOperand() == LI.getPointerOperand())) {
+    // degenerated side-channel
+    LI.removeNoaliasSideChannelOperand();
+    return &LI;
+  }
 
   // Try to canonicalize the loaded type.
   if (Instruction *Res = combineLoadToOperationType(*this, LI))
@@ -1219,6 +1253,7 @@ static bool unpackStoreToAggregate(InstCombiner &IC, StoreInst &SI) {
       AAMDNodes AAMD;
       SI.getAAMetadata(AAMD);
       NS->setAAMetadata(AAMD);
+      NS->setAAMetadataNoAliasSideChannel(AAMD);
     }
 
     return true;
@@ -1269,6 +1304,7 @@ static bool unpackStoreToAggregate(InstCombiner &IC, StoreInst &SI) {
       AAMDNodes AAMD;
       SI.getAAMetadata(AAMD);
       NS->setAAMetadata(AAMD);
+      NS->setAAMetadataNoAliasSideChannel(AAMD);
       Offset += EltSize;
     }
 
@@ -1350,6 +1386,13 @@ static bool removeBitcastsFromLoadStoreOnMinMax(InstCombiner &IC,
 Instruction *InstCombiner::visitStoreInst(StoreInst &SI) {
   Value *Val = SI.getOperand(0);
   Value *Ptr = SI.getOperand(1);
+
+  if (SI.hasNoaliasSideChannelOperand() &&
+      (SI.getNoaliasSideChannelOperand() == SI.getPointerOperand())) {
+    // degenerated side-channel
+    SI.removeNoaliasSideChannelOperand();
+    return &SI;
+  }
 
   // Try to canonicalize the stored type.
   if (combineStoreToValueType(*this, SI))
@@ -1591,6 +1634,7 @@ bool InstCombiner::mergeStoreIntoSuccessor(StoreInst &SI) {
   if (AATags) {
     OtherStore->getAAMetadata(AATags, /* Merge = */ true);
     NewSI->setAAMetadata(AATags);
+    NewSI->setAAMetadataNoAliasSideChannel(AATags);
   }
 
   // Nuke the old stores.

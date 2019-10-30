@@ -114,6 +114,40 @@ l:
 	ret i32 %val
 }
 
+; EITHER: define i32 @nc1a(i32* %q, i32* nocapture %p, i1 %b)
+define i32 @nc1a(i32* %q, i32* %p, i1 %b) {
+e:
+        %pa = call i32* @llvm.noalias.p0i32.p0i8.p0p0i32.i32(i32* %p, i8* null, i32** null, i32 0, metadata !1)
+	br label %l
+l:
+	%x = phi i32* [ %pa, %e ]
+	%y = phi i32* [ %q, %e ]
+	%tmp = bitcast i32* %x to i32*		; <i32*> [#uses=2]
+	%tmp2 = select i1 %b, i32* %tmp, i32* %y
+	%val = load i32, i32* %tmp2		; <i32> [#uses=1]
+	store i32 0, i32* %tmp
+	store i32* %y, i32** @g
+	ret i32 %val
+}
+
+; EITHER: define i32 @nc1b(i32* %q, i32* nocapture %p, i1 %b)
+define i32 @nc1b(i32* %q, i32* %p, i1 %b) {
+e:
+        %side.p = call i32* @llvm.side.noalias.p0i32.p0i8.p0p0i32.p0p0i32.i32(i32* %p, i8* null, i32** null, i32** null, i32 0, metadata !1)
+	br label %l
+l:
+	%x = phi i32* [ %p, %e ]
+	%side.x = phi i32* [ %side.p, %e ]
+	%y = phi i32* [ %q, %e ]
+	%tmp = bitcast i32* %x to i32*		; <i32*> [#uses=2]
+	%tmp2 = select i1 %b, i32* %tmp, i32* %y
+        %side.tmp2 = select i1 %b, i32* %side.x, i32* %y
+	%val = load i32, i32* %tmp2		; <i32> [#uses=1]
+	store i32 0, i32* %tmp, noalias_sidechannel i32* %side.tmp2
+	store i32* %y, i32** @g
+	ret i32 %val
+}
+
 ; EITHER: define i32 @nc1_addrspace(i32* %q, i32 addrspace(1)* nocapture %p, i1 %b)
 define i32 @nc1_addrspace(i32* %q, i32 addrspace(1)* %p, i1 %b) {
 e:
@@ -362,3 +396,9 @@ entry:
 
 declare i8* @llvm.launder.invariant.group.p0i8(i8*)
 declare i8* @llvm.strip.invariant.group.p0i8(i8*)
+
+declare i32*  @llvm.noalias.p0i32.p0i8.p0p0i32.i32(i32*, i8*, i32**, i32, metadata ) nounwind
+declare i32*  @llvm.side.noalias.p0i32.p0i8.p0p0i32.p0p0i32.i32(i32*, i8*, i32**, i32**, i32, metadata ) nounwind
+
+!0 = !{!0, !"some domain"}
+!1 = !{!1, !0, !"some scope"}

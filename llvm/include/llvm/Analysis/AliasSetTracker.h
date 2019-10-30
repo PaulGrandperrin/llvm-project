@@ -138,6 +138,10 @@ class AliasSet : public ilist_node<AliasSet> {
       }
       delete this;
     }
+    void updateNoAliasSideChannelIfMatching(Value *Old, Value *New) {
+      if (AAInfo.NoAliasSideChannel == Old)
+        AAInfo.NoAliasSideChannel = New;
+    }
   };
 
   // Doubly linked list of nodes.
@@ -354,6 +358,25 @@ class AliasSetTracker {
   // Map from pointers to their node
   PointerMapType PointerMap;
 
+  // FIXME: NOTE: when we get a callback, the resulting update might be _SLOW_
+  class ASTSideChannelCallbackVH final : public CallbackVH {
+    AliasSetTracker *AST;
+
+    void deleted() override;
+    void allUsesReplacedWith(Value *) override;
+
+  public:
+    ASTSideChannelCallbackVH(Value *V, AliasSetTracker *AST = nullptr);
+    ASTSideChannelCallbackVH &operator=(Value *V);
+  };
+
+  /// Traits to tell DenseMap that tell us how to compare and hash the value
+  /// handle.
+  struct ASTSideChannelCallbackVHDenseMapInfo : public DenseMapInfo<Value *> {};
+  using SideChannelSetType =
+      DenseSet<ASTSideChannelCallbackVH, ASTSideChannelCallbackVHDenseMapInfo>;
+  SideChannelSetType SideChannelPointers;
+
 public:
   /// Create an empty collection of AliasSets, and use the specified alias
   /// analysis object to disambiguate load and store addresses.
@@ -411,6 +434,19 @@ public:
   /// that use this method to introduce the same value multiple times: if the
   /// tracker already knows about a value, it will ignore the request.
   void copyValue(Value *From, Value *To);
+
+  /// This method is used to remove a side_channel pointer value from the
+  /// AliasSetTracker entirely. It should be used when an instruction is deleted
+  /// from the program to update the AST. If you don't use this, you would have
+  /// dangling pointers to deleted instructions.
+  void deleteSideChannelValue(Value *PtrVal);
+
+  /// This method should be used whenever a preexisting side_channel value in
+  /// the program is copied or cloned, introducing a new value.  Note that it is
+  /// ok for clients that use this method to introduce the same value multiple
+  /// times: if the tracker already knows about a value, it will ignore the
+  /// request.
+  void copySideChannelValue(Value *From, Value *To);
 
   using iterator = ilist<AliasSet>::iterator;
   using const_iterator = ilist<AliasSet>::const_iterator;

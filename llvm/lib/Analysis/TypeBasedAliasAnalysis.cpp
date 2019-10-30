@@ -112,6 +112,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/Pass.h"
@@ -519,6 +520,14 @@ static const MDNode *getLeastCommonType(const MDNode *A, const MDNode *B) {
   return Ret;
 }
 
+static Value *MergeSideChannel(Value *lhs, Value *rhs) {
+  // Similar to what we do for N.NoAlias: only identical side_channels can be
+  // merged
+  if (lhs == rhs)
+    return lhs;
+  return nullptr;
+}
+
 void Instruction::getAAMetadata(AAMDNodes &N, bool Merge) const {
   if (Merge)
     N.TBAA =
@@ -537,6 +546,25 @@ void Instruction::getAAMetadata(AAMDNodes &N, bool Merge) const {
         MDNode::intersect(N.NoAlias, getMetadata(LLVMContext::MD_noalias));
   else
     N.NoAlias = getMetadata(LLVMContext::MD_noalias);
+  if (const LoadInst *LI = dyn_cast<LoadInst>(this)) {
+    if (LI->hasNoaliasSideChannelOperand()) {
+      if (Merge) {
+        N.NoAliasSideChannel = MergeSideChannel(
+            N.NoAliasSideChannel, LI->getNoaliasSideChannelOperand());
+      } else {
+        N.NoAliasSideChannel = LI->getNoaliasSideChannelOperand();
+      }
+    }
+  } else if (const StoreInst *SI = dyn_cast<StoreInst>(this)) {
+    if (SI->hasNoaliasSideChannelOperand()) {
+      if (Merge) {
+        N.NoAliasSideChannel = MergeSideChannel(
+            N.NoAliasSideChannel, SI->getNoaliasSideChannelOperand());
+      } else {
+        N.NoAliasSideChannel = SI->getNoaliasSideChannelOperand();
+      }
+    }
+  }
 }
 
 static const MDNode *createAccessTag(const MDNode *AccessType) {

@@ -309,7 +309,14 @@ public:
   /// @}
 
   /// Sets the metadata on this instruction from the AAMDNodes structure.
+  /// NOTE: The noalias_sidechannel must be copied over explicitely using
+  /// 'setAAMetadataNoAliasSideChannel'. This must only be done if the dominator
+  /// relationship between the noalias_sidechannel and this instruction holds.
   void setAAMetadata(const AAMDNodes &N);
+
+  /// Sets (only) the noalias_sidechannel. Normally used in combination with
+  /// setAAMetadata.
+  void setAAMetadataNoAliasSideChannel(const AAMDNodes &N);
 
   /// Retrieve the raw weight values of a conditional branch or select.
   /// Returns true on success with profile weights filled in.

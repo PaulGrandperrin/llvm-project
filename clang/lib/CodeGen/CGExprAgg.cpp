@@ -1935,6 +1935,16 @@ void CodeGenFunction::EmitAggregateCopy(LValue Dest, LValue Src, QualType Ty,
     }
   }
 
+  // Guard copies of structs containing restrict pointers
+  if (Ty.isRestrictOrContainsRestrictMembers()) {
+    // NOTE: also see CodeGenFunction::EmitCall()
+    auto NoAliasScopeMD = getExistingOrUnknownNoAliasScope(SrcPtr.getPointer());
+    auto NoAliasDecl = getExistingNoAliasDeclOrNullptr(NoAliasScopeMD);
+    SrcPtr.adaptPointer(Builder.CreateNoAliasCopyGuard(
+        SrcPtr.getPointer(), NoAliasDecl, Ty.getRestrictIndices(),
+        NoAliasScopeMD));
+  }
+
   // Aggregate assignment turns into llvm.memcpy.  This is almost valid per
   // C99 6.5.16.1p3, which states "If the value being stored in an object is
   // read from another object that overlaps in anyway the storage of the first
@@ -2011,6 +2021,8 @@ void CodeGenFunction::EmitAggregateCopy(LValue Dest, LValue Src, QualType Ty,
   }
 
   auto Inst = Builder.CreateMemCpy(DestPtr, SrcPtr, SizeVal, isVolatile);
+  // track noalias scope for memcpy
+  recordMemoryInstruction(Inst);
 
   // Determine the metadata to describe the position of any padding in this
   // memcpy, as well as the TBAA tags for the members of the struct, in case

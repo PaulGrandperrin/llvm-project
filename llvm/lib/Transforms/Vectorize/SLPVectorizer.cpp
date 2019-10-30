@@ -1274,6 +1274,53 @@ private:
       }
     }
 
+    /// Set the operands of this bundle of load or store instructions in their
+    /// original order.
+    void setLoadStoreOperandsInOrder() {
+      assert(Operands.empty() && "Already initialized?");
+      auto *I0 = cast<Instruction>(Scalars[0]);
+      assert((isa<LoadInst>(I0) || isa<StoreInst>(I0)) &&
+             "Expect a load or store instruction");
+      unsigned NumOperands = isa<LoadInst>(I0) ? 1 : 2;
+
+      // Check if any instruction has a noalias_sidechannel
+      bool HasSideChannel =
+          std::any_of(Scalars.begin(), Scalars.end(), [&](auto *V) {
+            return cast<Instruction>(V)->getNumOperands() != NumOperands;
+          });
+
+      Operands.resize(NumOperands + HasSideChannel);
+      unsigned NumLanes = Scalars.size();
+      for (unsigned OpIdx = 0; OpIdx != NumOperands; ++OpIdx) {
+        Operands[OpIdx].resize(NumLanes);
+        for (unsigned Lane = 0; Lane != NumLanes; ++Lane) {
+          auto *I = cast<Instruction>(Scalars[Lane]);
+          assert(((I->getNumOperands() == NumOperands) ||
+                  (I->getNumOperands() == NumOperands + 1)) &&
+                 "Expected same number of operands (ignoring the "
+                 "noalias_sidechannel");
+          Operands[OpIdx][Lane] = I->getOperand(OpIdx);
+        }
+      }
+
+      if (HasSideChannel) {
+        // At least one instruction has a noalias_sidechannel.
+        // Keep track of the dependencies brought in by it. Later on we will
+        // omit the noalias information.
+        unsigned OpIdx = NumOperands;
+        Operands[OpIdx].resize(NumLanes);
+        for (unsigned Lane = 0; Lane != NumLanes; ++Lane) {
+          auto *I = cast<Instruction>(Scalars[Lane]);
+          if (I->getNumOperands() != NumOperands) {
+            Operands[OpIdx][Lane] = I->getOperand(OpIdx);
+          } else {
+            Operands[OpIdx][Lane] =
+                UndefValue::get(I->getOperand(OpIdx - 1)->getType());
+          }
+        }
+      }
+    }
+
     /// \returns the \p OpIdx operand of this TreeEntry.
     ValueList &getOperand(unsigned OpIdx) {
       assert(OpIdx < Operands.size() && "Off bounds");
@@ -2455,7 +2502,7 @@ void BoUpSLP::buildTree_rec(ArrayRef<Value *> VL, unsigned Depth,
             ++NumOpsWantToKeepOriginalOrder;
             TreeEntry *TE = newTreeEntry(VL, Bundle /*vectorized*/, S,
                                          UserTreeIdx, ReuseShuffleIndicies);
-            TE->setOperandsInOrder();
+            TE->setLoadStoreOperandsInOrder();
             LLVM_DEBUG(dbgs() << "SLP: added a vector of loads.\n");
           } else {
             // Need to reorder.
@@ -2464,7 +2511,7 @@ void BoUpSLP::buildTree_rec(ArrayRef<Value *> VL, unsigned Depth,
             TreeEntry *TE =
                 newTreeEntry(VL, Bundle /*vectorized*/, S, UserTreeIdx,
                              ReuseShuffleIndicies, I->getFirst());
-            TE->setOperandsInOrder();
+            TE->setLoadStoreOperandsInOrder();
             LLVM_DEBUG(dbgs() << "SLP: added a vector of jumbled loads.\n");
           }
           return;
@@ -3888,7 +3935,7 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
         PointerType *PtrTy = PointerType::get(VecTy, LI->getPointerAddressSpace());
         Value *Ptr = Builder.CreateBitCast(LI->getOperand(0), PtrTy);
         LoadInst *V = Builder.CreateAlignedLoad(VecTy, Ptr, LI->getAlignment());
-        Value *NewV = propagateMetadata(V, E->Scalars);
+        Value *NewV = propagateMetadata(V, E->Scalars, true);
         if (!E->ReorderIndices.empty()) {
           OrdersType Mask;
           inversePermutation(E->ReorderIndices, Mask);
@@ -4092,7 +4139,7 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
       if (!Alignment)
         Alignment = MaybeAlign(DL->getABITypeAlignment(ScalarLoadTy));
       LI->setAlignment(Alignment);
-      Value *V = propagateMetadata(LI, E->Scalars);
+      Value *V = propagateMetadata(LI, E->Scalars, (E->getNumOperands() == 2));
       if (IsReorder) {
         OrdersType Mask;
         inversePermutation(E->ReorderIndices, Mask);
@@ -4139,7 +4186,7 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
         Alignment = DL->getABITypeAlignment(SI->getValueOperand()->getType());
 
       ST->setAlignment(Align(Alignment));
-      Value *V = propagateMetadata(ST, E->Scalars);
+      Value *V = propagateMetadata(ST, E->Scalars, (E->getNumOperands() == 3));
       if (NeedToShuffleReuses) {
         V = Builder.CreateShuffleVector(V, UndefValue::get(VecTy),
                                         E->ReuseShuffleIndices, "shuffle");

@@ -260,8 +260,16 @@ void PassManagerBuilder::populateFunctionPassManager(
   addInitialAliasAnalysisPasses(FPM);
 
   FPM.add(createCFGSimplificationPass());
+  FPM.add(createConnectNoAliasDeclPass());
   FPM.add(createSROAPass());
   FPM.add(createEarlyCSEPass());
+
+  // Propagate and Convert as early as possible.
+  // But do it after SROA!
+  FPM.add(createPropagateAndConvertNoAliasPass());
+  if (VerifyOutput)
+    FPM.add(createVerifierPass());
+
   FPM.add(createLowerExpectIntrinsicPass());
 }
 
@@ -290,8 +298,16 @@ void PassManagerBuilder::addPGOInstrPasses(legacy::PassManagerBase &MPM,
     IP.HintThreshold = 325;
 
     MPM.add(createFunctionInliningPass(IP));
+    MPM.add(createConnectNoAliasDeclPass());
     MPM.add(createSROAPass());
     MPM.add(createEarlyCSEPass());             // Catch trivial redundancies
+
+    // Propagate and Convert as early as possible.
+    // But do it after SROA and EarlyCSE !
+    MPM.add(createPropagateAndConvertNoAliasPass());
+    if (VerifyOutput)
+      MPM.add(createVerifierPass());
+
     MPM.add(createCFGSimplificationPass());    // Merge & remove BBs
     MPM.add(createInstructionCombiningPass()); // Combine silly seq's
     addExtensionsToPM(EP_Peephole, MPM);
@@ -319,9 +335,17 @@ void PassManagerBuilder::addPGOInstrPasses(legacy::PassManagerBase &MPM,
 void PassManagerBuilder::addFunctionSimplificationPasses(
     legacy::PassManagerBase &MPM) {
   // Start of function pass.
+  MPM.add(createConnectNoAliasDeclPass());
   // Break up aggregate allocas, using SSAUpdater.
   MPM.add(createSROAPass());
   MPM.add(createEarlyCSEPass(true /* Enable mem-ssa. */)); // Catch trivial redundancies
+
+  // Propagate and Convert as early as possible.
+  // But do it after SROA and EarlyCSE !
+  MPM.add(createPropagateAndConvertNoAliasPass());
+  if (VerifyOutput)
+    MPM.add(createVerifierPass());
+
   if (EnableGVNHoist)
     MPM.add(createGVNHoistPass());
   if (EnableGVNSink) {
@@ -402,6 +426,14 @@ void PassManagerBuilder::addFunctionSimplificationPasses(
   // opened up by them.
   addInstructionCombiningPass(MPM);
   addExtensionsToPM(EP_Peephole, MPM);
+
+  MPM.add(createConnectNoAliasDeclPass());
+  // Propagate and Convert as early as possible.
+  // But do it after SROA!
+  MPM.add(createPropagateAndConvertNoAliasPass());
+  if (VerifyOutput)
+    MPM.add(createVerifierPass());
+
   MPM.add(createJumpThreadingPass());         // Thread jumps
   MPM.add(createCorrelatedValuePropagationPass());
   MPM.add(createDeadStoreEliminationPass());  // Delete dead stores
@@ -555,6 +587,12 @@ void PassManagerBuilder::populateModulePassManager(
     MPM.add(Inliner);
     Inliner = nullptr;
     RunInliner = true;
+
+    // Propagate and Convert as early as possible.
+    // But do it after SROA!
+    MPM.add(createPropagateAndConvertNoAliasPass());
+    if (VerifyOutput)
+      MPM.add(createVerifierPass());
   }
 
   MPM.add(createPostOrderFunctionAttrsLegacyPass());
@@ -873,6 +911,12 @@ void PassManagerBuilder::addLTOOptimizationPasses(legacy::PassManagerBase &PM) {
   if (RunInliner) {
     PM.add(Inliner);
     Inliner = nullptr;
+
+    // Propagate and Convert as early as possible.
+    // But do it after SROA!
+    PM.add(createPropagateAndConvertNoAliasPass());
+    if (VerifyOutput)
+      PM.add(createVerifierPass());
   }
 
   PM.add(createPruneEHPass());   // Remove dead EH info.
@@ -896,6 +940,12 @@ void PassManagerBuilder::addLTOOptimizationPasses(legacy::PassManagerBase &PM) {
 
   // Break up allocas
   PM.add(createSROAPass());
+
+  // Propagate and Convert as early as possible.
+  // But do it after SROA!
+  PM.add(createPropagateAndConvertNoAliasPass());
+  if (VerifyOutput)
+    PM.add(createVerifierPass());
 
   // LTO provides additional opportunities for tailcall elimination due to
   // link-time inlining, and visibility of nocapture attribute.

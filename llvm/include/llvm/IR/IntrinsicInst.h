@@ -888,6 +888,19 @@ namespace llvm {
     }
   };
 
+  /// Returns true when two llvm.side.noalias represent the same noalias info.
+  inline bool areSideNoaliasCompatible(const IntrinsicInst *lhs,
+                                       const IntrinsicInst *rhs) {
+    assert(lhs->getIntrinsicID() == Intrinsic::side_noalias &&
+           rhs->getIntrinsicID() == Intrinsic::side_noalias &&
+           "Can only check noalias compatibility of side_noalias");
+    return (lhs->getOperand(Intrinsic::SideNoAliasScopeArg) ==
+            rhs->getOperand(Intrinsic::SideNoAliasScopeArg)) &&
+           (lhs->getOperand(Intrinsic::SideNoAliasIdentifyPObjIdArg) ==
+            rhs->getOperand(Intrinsic::SideNoAliasIdentifyPObjIdArg)) &&
+           (lhs->getOperand(Intrinsic::SideNoAliasIdentifyPArg) ==
+            rhs->getOperand(Intrinsic::SideNoAliasIdentifyPArg));
+  }
 } // end namespace llvm
 
 #endif // LLVM_IR_INTRINSICINST_H

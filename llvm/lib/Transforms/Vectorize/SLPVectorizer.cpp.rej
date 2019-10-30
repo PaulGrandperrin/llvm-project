@@ -1,0 +1,17 @@
+***************
+*** 2682,2688 ****
+        ValueList Operands;
+        for (Value *V : VL)
+          Operands.push_back(cast<Instruction>(V)->getOperand(0));
+-       TE->setOperandsInOrder();
+        buildTree_rec(Operands, Depth + 1, {TE, 0});
+        return;
+      }
+--- 2729,2735 ----
+        ValueList Operands;
+        for (Value *V : VL)
+          Operands.push_back(cast<Instruction>(V)->getOperand(0));
++       TE->setLoadStoreOperandsInOrder();
+        buildTree_rec(Operands, Depth + 1, {TE, 0});
+        return;
+      }

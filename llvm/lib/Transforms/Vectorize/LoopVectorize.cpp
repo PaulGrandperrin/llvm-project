@@ -907,7 +907,13 @@ void InnerLoopVectorizer::addNewMetadata(Instruction *To,
 
 void InnerLoopVectorizer::addMetadata(Instruction *To,
                                       Instruction *From) {
-  propagateMetadata(To, From);
+  bool HasSideChannel = true;
+  if (auto *SI = dyn_cast<StoreInst>(From)) {
+    HasSideChannel = SI->hasNoaliasSideChannelOperand();
+  } else if (auto *LI = dyn_cast<LoadInst>(From)) {
+    HasSideChannel = LI->hasNoaliasSideChannelOperand();
+  }
+  propagateMetadata(To, From, HasSideChannel);
   addNewMetadata(To, From);
 }
 
@@ -3235,11 +3241,6 @@ unsigned LoopVectorizationCostModel::getVectorCallCost(CallInst *CI,
   if (VF == 1)
     return ScalarCallCost;
 
-  // Compute corresponding vector type for return value and arguments.
-  Type *RetTy = ToVectorTy(ScalarRetTy, VF);
-  for (Type *ScalarTy : ScalarTys)
-    Tys.push_back(ToVectorTy(ScalarTy, VF));
-
   // Compute costs of unpacking argument values for the scalar calls and
   // packing the return values to a vector.
   unsigned ScalarizationCost = getScalarizationOverhead(CI, VF);
@@ -3251,6 +3252,11 @@ unsigned LoopVectorizationCostModel::getVectorCallCost(CallInst *CI,
   NeedToScalarize = true;
   if (!TLI || !TLI->isFunctionVectorizable(FnName, VF) || CI->isNoBuiltin())
     return Cost;
+
+  // Compute corresponding vector type for return value and arguments.
+  Type *RetTy = ToVectorTy(ScalarRetTy, VF);
+  for (Type *ScalarTy : ScalarTys)
+    Tys.push_back(ToVectorTy(ScalarTy, VF));
 
   // If the corresponding vector cost is cheaper, return its cost.
   unsigned VectorCallCost = TTI.getCallInstrCost(nullptr, RetTy, Tys);
@@ -6891,7 +6897,8 @@ bool VPRecipeBuilder::tryToWiden(Instruction *I, VPBasicBlock *VPBB,
   if (CallInst *CI = dyn_cast<CallInst>(I)) {
     Intrinsic::ID ID = getVectorIntrinsicIDForCall(CI, TLI);
     if (ID && (ID == Intrinsic::assume || ID == Intrinsic::lifetime_end ||
-               ID == Intrinsic::lifetime_start || ID == Intrinsic::sideeffect))
+               ID == Intrinsic::lifetime_start || ID == Intrinsic::sideeffect ||
+               ID == Intrinsic::noalias || ID == Intrinsic::side_noalias))
       return false;
   }
 

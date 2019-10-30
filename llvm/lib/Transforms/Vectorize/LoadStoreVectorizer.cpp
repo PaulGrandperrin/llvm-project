@@ -280,9 +280,10 @@ PreservedAnalyses LoadStoreVectorizerPass::run(Function &F, FunctionAnalysisMana
 
 // The real propagateMetadata expects a SmallVector<Value*>, but we deal in
 // vectors of Instructions.
-static void propagateMetadata(Instruction *I, ArrayRef<Instruction *> IL) {
+static void propagateMetadata(Instruction *I, ArrayRef<Instruction *> IL,
+                              bool RemoveNoAlias) {
   SmallVector<Value *, 8> VL(IL.begin(), IL.end());
-  propagateMetadata(I, VL);
+  propagateMetadata(I, VL, RemoveNoAlias);
 }
 
 // Vectorizer Implementation
@@ -1074,11 +1075,15 @@ bool Vectorizer::vectorizeStoreChain(
     }
   }
 
+  bool HasSideChannel =
+      std::any_of(Chain.begin(), Chain.end(), [](const auto &I) {
+        return cast<StoreInst>(I)->hasNoaliasSideChannelOperand();
+      });
   StoreInst *SI = Builder.CreateAlignedStore(
     Vec,
     Builder.CreateBitCast(S0->getPointerOperand(), VecTy->getPointerTo(AS)),
     Alignment);
-  propagateMetadata(SI, Chain);
+  propagateMetadata(SI, Chain, HasSideChannel);
 
   eraseInstructions(Chain);
   ++NumVectorInstructions;
@@ -1191,10 +1196,14 @@ bool Vectorizer::vectorizeLoadChain(
   std::tie(First, Last) = getBoundaryInstrs(Chain);
   Builder.SetInsertPoint(&*First);
 
+  bool HasSideChannel =
+      std::any_of(Chain.begin(), Chain.end(), [](const auto &I) {
+        return cast<LoadInst>(I)->hasNoaliasSideChannelOperand();
+      });
   Value *Bitcast =
       Builder.CreateBitCast(L0->getPointerOperand(), VecTy->getPointerTo(AS));
   LoadInst *LI = Builder.CreateAlignedLoad(VecTy, Bitcast, Alignment);
-  propagateMetadata(LI, Chain);
+  propagateMetadata(LI, Chain, HasSideChannel);
 
   if (VecLoadTy) {
     SmallVector<Instruction *, 16> InstrsToErase;

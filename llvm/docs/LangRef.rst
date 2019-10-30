@@ -5114,6 +5114,8 @@ Note that the fields need not be contiguous. In this example, there is a
 4 byte gap between the two fields. This gap represents padding which
 does not carry useful data and need not be preserved.
 
+.. _noalias_and_aliasscope:
+
 '``noalias``' and '``alias.scope``' Metadata
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -8663,8 +8665,8 @@ Syntax:
 
 ::
 
-      <result> = load [volatile] <ty>, <ty>* <pointer>[, align <alignment>][, !nontemporal !<index>][, !invariant.load !<index>][, !invariant.group !<index>][, !nonnull !<index>][, !dereferenceable !<deref_bytes_node>][, !dereferenceable_or_null !<deref_bytes_node>][, !align !<align_node>]
-      <result> = load atomic [volatile] <ty>, <ty>* <pointer> [syncscope("<target-scope>")] <ordering>, align <alignment> [, !invariant.group !<index>]
+      <result> = load [volatile] <ty>, <ty>* <pointer>[, noalias_sidechannel <ty>* <channel>][, align <alignment>][, !nontemporal !<index>][, !invariant.load !<index>][, !invariant.group !<index>][, !nonnull !<index>][, !dereferenceable !<deref_bytes_node>][, !dereferenceable_or_null !<deref_bytes_node>][, !align !<align_node>]
+      <result> = load atomic [volatile] <ty>, <ty>* <pointer>[, noalias_sidechannel <ty>* <channel>] [syncscope("<target-scope>")] <ordering>, align <alignment> [, !invariant.group !<index>]
       !<index> = !{ i32 1 }
       !<deref_bytes_node> = !{i64 <dereferenceable_bytes>}
       !<align_node> = !{ i64 <value_alignment> }
@@ -8694,6 +8696,13 @@ eight and less than or equal to a target-specific size limit.  ``align`` must be
 explicitly specified on atomic loads, and the load has undefined behavior if the
 alignment is not set to a value which is at least the size in bytes of the
 pointee. ``!nontemporal`` does not have any defined semantics for atomic loads.
+
+The optional ``noalias_sidechannel`` argument specifies the noalias chain of the
+pointer operand. It has the same type as the pointer operand. Together with the
+``!noalias`` metadata on the instruction, and the ``llvm.side.noalias``,
+``llvm.noalias.arg.guard`` intrinsics in the chain, this is used to deduce if
+two load/store instructions may or may not alias. (See `Scoped NoAlias Related
+Intrinsics`_)
 
 The optional constant ``align`` argument specifies the alignment of the
 operation (that is, the alignment of the memory address). A value of 0
@@ -8787,8 +8796,8 @@ Syntax:
 
 ::
 
-      store [volatile] <ty> <value>, <ty>* <pointer>[, align <alignment>][, !nontemporal !<index>][, !invariant.group !<index>]        ; yields void
-      store atomic [volatile] <ty> <value>, <ty>* <pointer> [syncscope("<target-scope>")] <ordering>, align <alignment> [, !invariant.group !<index>] ; yields void
+      store [volatile] <ty> <value>, <ty>* <pointer>[, noalias_sidechannel <ty>* <channel>][, align <alignment>][, !nontemporal !<index>][, !invariant.group !<index>]        ; yields void
+      store atomic [volatile] <ty> <value>, <ty>* <pointer>[, noalias_sidechannel <ty>* <channel>] [syncscope("<target-scope>")] <ordering>, align <alignment> [, !invariant.group !<index>] ; yields void
 
 Overview:
 """""""""
@@ -8817,6 +8826,13 @@ eight and less than or equal to a target-specific size limit.  ``align`` must be
 explicitly specified on atomic stores, and the store has undefined behavior if
 the alignment is not set to a value which is at least the size in bytes of the
 pointee. ``!nontemporal`` does not have any defined semantics for atomic stores.
+
+The optional ``noalias_sidechannel`` argument specifies the noalias chain of the
+pointer operand. It has the same type as the pointer operand. Together with the
+``!noalias`` metadata on the instruction, and the ``llvm.side.noalias``,
+``llvm.noalias.arg.guard`` intrinsics in the chain, this is used to deduce if
+two load/store instructions may or may not alias. (See `Scoped NoAlias Related
+Intrinsics`_)
 
 The optional constant ``align`` argument specifies the alignment of the
 operation (that is, the alignment of the memory address). A value of 0
@@ -16407,6 +16423,520 @@ Semantics:
 
 This function returns the same values as the libm ``trunc`` functions
 would and handles error conditions in the same way.
+
+Scoped NoAlias Related Intrinsics
+---------------------------------
+
+This set of intrinsics provide the basis for full C99 '``restrict``' support
+(See: iso-C99-n1256, 6.7.3.1 'Formal definition of restrict').
+
+In C99 restrict, accesses using a pointer based on a restrict pointer ``p``
+are assumed to not alias with other accesses that are not based on ``p``, as
+long as both accesses are within the scope of the declaration of  ``p``.
+
+The intrinsics work together with the '``!noalias``'
+:ref:`metadata <noalias_and_aliasscope>` annotations on memory instructions and
+the ``noalias_sidechannel`` of ``load`` and ``store`` instructions. The
+documentation below explains how it works, with ``restrict`` in mind.
+The intrinsics can also be used to specify alias assumptions that are
+not restrict based.
+
+The full set of intrinsics is:
+
+.. code-block:: llvm
+
+      %p.decl       = i8* @llvm.noalias.decl.XXX(i8** %p.alloc, i32 <p.objId>, metadata !p.scope)
+      %p.noalias    = i8* @llvm.noalias.XXX(i8* %p, i8* %p.decl, i8** %p.addr,
+                                            i32 <p.objId>, metadata !p.scope) !noalias !VisibleScopes
+      %side.p       = i8* @llvm.side.noalias.XXX(i8* %side.p, i8* %p.decl,
+                                            i8** p.addr, i8** %side.p.addr,
+                                            i32 <p.objId>, metadata !p.scope) !noalias !VisibleScopes
+      %p.guard      = i8* @llvm.noalias.arg.guard.XXX(i8* %p, i8* %side.p)
+      %p.copy.guard = %struct.FOO* @llvm.noalias.copy.guard.XXX(%struct.FOO* %p.block, i8* %p.decl,
+                                                              metadata !p.indices, metadata !p.scope)
+
+
+Note: ``XXX`` is the encoding of the return type and the types of the arguments.
+
+Overview
+^^^^^^^^
+
+Modeling ``restrict`` requires two pieces of information for a memory
+instruction:
+
+- the *depends on* relationship of the pointer path on a restrict pointer
+- the *visibility* of that restrict pointer to the memory instruction
+
+The ``!noalias`` metadata specifies which noalias scopes are visible for the
+specified memory instruction.
+
+Unlike ``alias.scope`` metadata, which applies only to the access to which it
+is attached, the ``llvm.noalias`` and ``llvm.side.noalias`` intrinsics apply
+to all pointers based on the return value. They are used to specify the
+*depends on* relationship and the associated noalias scope for the pointer.
+
+The ``llvm.noalias`` intrinsic introduces alias assumptions in the normal
+computation path  of a pointer and it will be opaque for most optimizations. The
+``PropagateAndConvertNoAlias`` pass converts ``llvm.noalias`` intrinsics into
+``llvm.side.noalias`` intrinsics. At the same time, it splits the pointer path
+in a computation path (without ``llvm.noalias`` intrinsics) and a
+``noalias_sidechannel`` path (with ``llvm.side.noalias`` intrinsics). This
+allows optimization passes to adapt the normal pointer path, without impacting
+the knowledge about the *depends on* relationship.
+
+The ``llvm.noalias.decl`` intrinsic is used to identify the exact location of
+a *restrict pointer declaration*. When this is done inside the loop body,
+care must be taken to duplicate and uniquify the scopes and intrinsics when
+the loop is unrolled. Otherwise the restrict scope could spill across
+iterations.
+
+The ``llvm.noalias.arg.guard`` intrinsic is used to track the computaton path
+and the noalias_sidechannel path of a pointer this forwarded to a function,
+or returned from a function. After inlining, the correct dependencies can still
+be propagated.
+
+The ``llvm.noalias.copy.guard`` intrinsic is used to annotate that the returned
+pointer points to a blob of memory that contains restrict pointers. This allows
+to track the *based on* dependency when copying such blocks of memory.
+
+Arguments
+^^^^^^^^^
+
+Following arguments are typically used in the various intrinscis:
+
+- ``%p``: the value of the restrict pointer
+- ``%p.addr``: the address of ``%p`` (*object P* in the C99 standard).
+  Either a real object, a constant where the value is relative to 0 or ``null``.
+  Different ``%p.addr`` represent different restrict pointers, pointing to
+  disjunct objects.
+- ``p.objId``: a number that can be used to differentiate different *object P*
+  when ``%p.addr`` is optimized away.
+- ``!p.scope``: metadata argument that refers to a list of alias.scope metadata
+  entries that contains exactly one element. It represents the variable
+  declaration that contains one or more restrict pointers.
+- ``%p.decl``: points to the ``@llvm.noalias.decl`` intrinsic associated with
+  the declaration of a restrict variable.
+- ``%p.alloca``: points to the alloca associated with the declaration of a
+  restrict variable
+- ``%side.p``: the noalias_sidechannel associated with ``%p``.
+- ``%side.p.addr``: the noalias_sidechannel associated with ``%p.addr``.
+- ``%p.block``: the address of a block in memory or on the stack is associated
+  with a variable that contains at least one restrict pointer.
+- ``!p.indices``: metadata argument that refers to a list of metadata
+  references. Each reference points to a metadata array of indices. At the
+  specified location, a restrict pointer is located. A '-1' indicates any index.
+
+Unknown Function Scope
+^^^^^^^^^^^^^^^^^^^^^^
+
+A special ``unknown function scope`` can be used to identify restrict
+properties when the actual variable declaration is not known. In that case,
+the ``%p.decl`` argument will be ``null`` and the ``!p.scope`` refers to the
+``unknown function scope``.
+
+The ``unknown function scope`` is annotated as ``!noalias`` metadata on the
+function itself.
+
+Restrictness
+^^^^^^^^^^^^
+
+The restrictness of a restrict pointer ``%p``, as given by the
+``llvm.side.noalias`` intrinsic, can be expressed by following arguments:
+
+- ``%p.addr``: its address (*object P* in the C99 standard)
+- ``p.objId``: an extra number
+- ``!p.scope``: a declaration scope, related to the variable declaration.
+
+The { ``%p.addr``, ``p.objId``, ``!p.scope`` } tuple represents a
+unique restrict pointer, which means that it refers to its own set of objects.
+
+- Let *MemA* and *MemB* be two memory accesses.
+- Let *A* be the set of ``llvm.side.noalias`` intrinsics on which *MemA*
+  depends and for which the scopes are visible to both *MemA* and *MemB*
+- Let *B* be the set of ``llvm.side.noalias`` intrinsics on which *MemB*
+  depends and for which the scopes are visible to both *MemA* and *MemB*
+- When the intersection of both sets, comparing the
+  { ``%p.addr``, ``p.objId``, ``!p.scope`` } tuples, is empty, *MemA* and *MemB*
+  can be treated as not-aliasing accesses.
+- A tuple related to the ``unknown function scope`` is handled as if it is
+  identical to any other tuple, unless it can be proven that their ``%p.addr``
+  are disjunct.
+
+Examples
+^^^^^^^^
+
+Using a restrict pointer and passing it to a function:
+
+.. code-block:: c
+
+      void foo(int*);
+      void setP(int* restrict p) {
+        p[3]=42;
+        foo(&p[3]);
+      }
+
+Before optimizations, there is the declaration of the restrict pointer and
+``llvm.noalias`` is used whenever the value of the restrict pointer is read.
+
+.. code-block:: llvm
+
+      ; Function Attrs: nounwind uwtable
+      define dso_local void @setP(i32* %p) #0 {
+      entry:
+        %p.addr = alloca i32*, align 8
+        %0 = call i8* @llvm.noalias.decl.p0i8.p0p0i32.i32(i32** %p.addr, i32 0, metadata !2)
+        store i32* %p, i32** %p.addr, align 8, !tbaa !5, !noalias !2
+        %1 = load i32*, i32** %p.addr, align 8, !tbaa !5, !noalias !2
+        %2 = call i32* @llvm.noalias.p0i32.p0i8.p0p0i32.i32(i32* %1, i8* %0,
+                                   i32** %p.addr, i32 0, metadata !2), !tbaa !5, !noalias !2
+        %arrayidx = getelementptr inbounds i32, i32* %2, i64 3
+        store i32 42, i32* %arrayidx, align 4, !tbaa !9, !noalias !2
+        %3 = load i32*, i32** %p.addr, align 8, !tbaa !5, !noalias !2
+        %4 = call i32* @llvm.noalias.p0i32.p0i8.p0p0i32.i32(i32* %3, i8* %0,
+                                   i32** %p.addr, i32 0, metadata !2), !tbaa !5, !noalias !2
+        %arrayidx1 = getelementptr inbounds i32, i32* %4, i64 3
+        call void @foo(i32* %arrayidx1), !noalias !2
+        ret void
+      }
+
+During optimizations, the ``llvm.noalias`` intrinsic is moved onto the
+``noalias_sidechannel`` and converted into a ``llvm.side.noalias``. The argument
+to ``foo`` has been guarded to keep track of the restrict information. Notice
+that the pointer computation is not done on the ``noalias_sidechannel`` path.
+
+.. code-block:: llvm
+
+      ; Function Attrs: nounwind uwtable
+      define dso_local void @setP(i32* %p) local_unnamed_addr #0 {
+      entry:
+        %0 = tail call i8* @llvm.noalias.decl.p0i8.p0p0i32.i32(i32** null, i32 0, metadata !2)
+        %1 = tail call i32* @llvm.side.noalias.p0i32.p0i8.p0p0i32.p0p0i32.i32(i32* %p, i8* %0,
+                           i32** null, i32** undef, i32 0, metadata !2), !tbaa !5, !noalias !2
+        %arrayidx = getelementptr inbounds i32, i32* %p, i64 3
+        store i32 42, i32* %arrayidx, noalias_sidechannel i32* %1, align 4, !tbaa !9, !noalias !2
+        %arrayidx1.guard =
+                 call i32* @llvm.noalias.arg.guard.p0i32.p0i32(i32* nonnull %arrayidx, i32* %1)
+        tail call void @foo(i32* nonnull %arrayidx1.guard) #6, !noalias !2
+        ret void
+      }
+
+      [...]
+
+      !2 = !{!3}
+      !3 = distinct !{!3, !4, !"setP: p"}
+      !4 = distinct !{!4, !"setP"}
+      !5 = !{!6, !6, i64 0}
+      !6 = !{!"any pointer", !7, i64 0}
+      !7 = !{!"omnipotent char", !8, i64 0}
+      !8 = !{!"Simple C/C++ TBAA"}
+      !9 = !{!10, !10, i64 0}
+      !10 = !{!"int", !7, i64 0}
+
+
+Copying a struct that contains restrict member pointers:
+
+.. code-block:: c
+
+      struct FOO {
+        int* restrict mP0;
+        int*          mP1;
+        int* restrict mP2;
+      };
+      void copyFOO(struct FOO* dst, struct FOO* src) {
+        *dst = *src;
+      }
+
+The ``llvm.noalias.copy.guard`` tracks the location of those restrict pointer
+members through metadata !14. Also notice the usage of the
+``unknown function scope`` !11, as the function refers to an object whose
+declaration must live outside the function.
+
+.. code-block:: llvm
+
+      ; Function Attrs: nounwind uwtable
+      define dso_local void @copyFOO(%struct.FOO* nocapture %dst,
+                       %struct.FOO* nocapture readonly %src) local_unnamed_addr #0 !noalias !11 {
+      entry:
+        %0 = tail call %struct.FOO* @llvm.noalias.copy.guard.p0s_struct.FOOs.p0i8(%struct.FOO* %src,
+                                                                 i8* null, metadata !14, metadata !11)
+        %1 = bitcast %struct.FOO* %dst to i8*
+        %2 = bitcast %struct.FOO* %0 to i8*
+        tail call void @llvm.memcpy.p0i8.p0i8.i64(i8* nonnull align 8 dereferenceable(24) %1,
+           i8* nonnull align 8 dereferenceable(24) %2, i64 24, i1 false), !tbaa.struct !17, !noalias !11
+        ret void
+      }
+
+      [...]
+
+      !11 = !{!12}
+      !12 = distinct !{!12, !13, !"copyFOO: unknown scope"}
+      !13 = distinct !{!13, !"copyFOO"}
+      !14 = !{!15, !16}
+      !15 = !{i64 -1, i64 0}
+      !16 = !{i64 -1, i64 2}
+      !17 = !{i64 0, i64 8, !5, i64 8, i64 8, !5, i64 16, i64 8, !5}
+
+
+.. _int_noalias_decl:
+
+'``llvm.noalias.decl``' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Syntax:
+"""""""
+
+This is an overloaded intrinsic. The return type and argument types are encoded
+in ``XXX``.
+
+::
+
+      declare i8* @llvm.noalias.decl.XXX(<type>* %p.alloca, i32 <p.objId>, metadata !p.scope)
+
+Overview:
+"""""""""
+
+``llvm.noalias.decl`` is inserted at the location of a restrict pointer
+declaration. It makes it possible to identify that a restrict scope is only
+valid inside the body of a loop. It also makes it possible to identify that a
+certain ``alloca`` is associated to an object that contains one or more
+restrict pointers.
+
+The handle it returns is always of type ``i8*`` and does
+not really represent a value. It is merely used to track a dependency on the
+declaration.
+
+Arguments:
+""""""""""
+
+The first argument ``%p.alloca`` points to the ``alloca`` that contains one
+or more restrict pointers. It can also be ``null`` if the ``alloca`` has been
+optimized away.
+
+The second argument ``p.objId`` is an integer representing an object id.
+
+The third argument ``!p.scope`` is metadata that is a list of ``noalias``
+metadata references. The format is identical to that required for ``noalias``
+metadata. This list must have exactly one element.
+
+Semantics:
+""""""""""
+
+The ``llvm.noalias.decl`` intrinsic is used to identify the exact location of
+a *restrict pointer declaration*. When this is done inside the loop body,
+care must be taken to duplicate and uniquify the scopes and intrinsics when
+the loop is unrolled. Otherwise the restrict scope could spill across
+iterations.
+
+It also associates specific restrict properties to an ``alloca`` and is used
+to propagate those properties to ``llvm.noalias``, ``llvm.side.noalias`` and
+``llvm.noalias.copy.guard`` intrinsics when inlining and optimizations make
+the relationship between those intrinsics and the actual variable declaration
+visible.
+
+
+.. _int_noalias:
+
+'``llvm.noalias``' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Syntax:
+"""""""
+
+This is an overloaded intrinsic. The return type and argument types are encoded
+in ``XXX``.
+
+::
+
+      declare <type>* @llvm.noalias.XXX(<type>* %p, i8* %p.decl, <type>** %p.addr,
+                                        i32 <p.objId>, metadata !p.scope)
+
+Overview:
+"""""""""
+
+``llvm.noalias`` is inserted at the moment that restrict properties are
+introduced. This is typically done after loading a restrict pointer from
+memory. Its return value can be seen as *the pointer value with restrict
+properties*
+
+Arguments:
+""""""""""
+
+The first argument ``%p`` is the pointer on which the aliasing assumption is
+being placed.
+
+The second argument ``%p.decl`` refers to the ``llvm.noalias.decl`` that is
+associated with the pointer declaration.
+
+The third argument ``%p.addr`` is the address in memory of this pointer.
+
+The fourth argument ``p.objId`` is an integer representing an object id.
+
+The fifth argument ``!p.scope`` is metadata that is a list of ``noalias``
+metadata references. The format is identical to that required for ``noalias``
+metadata. This list must have exactly one element.
+
+Semantics:
+""""""""""
+
+The ``llvm.noalias`` intrinsic adds alias assumptions to the pointer
+computation path. It also blocks optimizations on this computation path.
+
+It will be transformed into a ``llvm.side.noalias`` intrinsic and moved onto
+the ``noalias_sidechannel`` path, so that pointer optimizations can still be
+done and the restrict information is not lost.
+
+
+.. _int_side_noalias:
+
+'``llvm.side.noalias``' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Syntax:
+"""""""
+
+This is an overloaded intrinsic. The return type and argument types are encoded
+in ``XXX``.
+
+::
+
+      declare <type>* @llvm.side.noalias.XXX(<type>* %p, i8* %p.decl,
+                                             <type>** %p.addr, <type>** %side.p.addr,
+                                             i32 <p.objId>, metadata !p.scope)
+
+Overview:
+"""""""""
+
+``llvm.side.noalias`` is inserted at the moment that restrict properties are
+introduced on the ``noalias_sidechannel``. This is typically done when a
+``llvm.noalias`` is converted into the ``llvm.side.noalias``
+
+The value it returns (``%side.p``) is representing the pointer ``%p`` on the
+``noalias_sidechannel``.
+
+Arguments:
+""""""""""
+
+The first argument ``%p`` is the pointer (or its ``noalias_sidechannel``) on
+which the aliasing assumption is being placed.
+
+The second argument ``%p.decl`` refers to the ``llvm.noalias.decl`` that is
+associated with the pointer declaration.
+
+The third argument ``%p.addr`` is the address in memory of this pointer.
+
+The fourth argument ``%side.p.addr`` represents ``%p.addr`` on the
+``noalias_sidechannel``.
+
+The fifth argument ``p.objId`` is an integer representing an object id.
+
+The sixth argument ``!p.scope`` is metadata that is a list of ``noalias``
+metadata references. The format is identical to that required for ``noalias``
+metadata. This list must have exactly one element.
+
+
+Semantics:
+""""""""""
+
+The ``llvm.side.noalias`` intrinsic adds alias assumptions to the
+``noalias_sidechannel`` of the memory instructions that depends on it.
+
+For this purpose, the ``llvm.side.noalias`` itself is also considered to be
+a memory instruction and has its own ``noalias_sidechannel`` for the ``%p.addr``
+argument.
+
+
+.. _int_noalias_arg_guard:
+
+'``llvm.noalias.arg.guard``' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Syntax:
+"""""""
+
+This is an overloaded intrinsic. The return type and argument types are encoded
+in ``XXX``.
+
+::
+
+      declare <type>* @llvm.noalias.arg.guard.XXX(<type>* %p, <type>* %side.p)
+
+Overview:
+"""""""""
+
+The ``llvm.noalias.arg.guard`` intrinsic brings alias assumption properties that
+are on the ``noalias_sidechannel`` path of a pointer back into the
+computation path of that pointer.
+
+Arguments:
+""""""""""
+
+The first argument ``%p`` represents the computation path of the pointer.
+
+The second argument ``%side.p`` represents the ``noalias_sidechannel`` path
+of that pointer.
+
+Semantics:
+""""""""""
+
+The ``llvm.noalias.arg.guard`` is typically generated when a ``llvm.noalias``
+intrinsic is converted to a ``llvm.side.noalias``, but the pointer escapes
+because it is used as an argument to a function or it is returned.
+
+It can typically be optimized away after inlining:
+* When it is encountered on the computation path, it is assumed to return the
+first argument ``%p``.
+
+When it is encountered on a ``noalias_sidechannel`` path, it is assumed to
+return the second argument ``%side.p``.
+
+
+.. _int_noalias.copy.guard:
+
+'``llvm.noalias.copy.guard``' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Syntax:
+"""""""
+
+This is an overloaded intrinsic. The return type and argument types are encoded
+in ``XXX``.
+
+::
+
+      declare <type>* @llvm.noalias.copy.guard.XXX(<type>* %p.block, i8* %p.decl,
+                                                   metadata !p.indices, metadata !p.scope)
+
+Overview:
+"""""""""
+
+``llvm.noalias.copy.guard`` is inserted in the source pointer argument when a
+block of memory that will be copied (either using ``llvm.memcpy`` or a
+combination of ``load``/``store`` instructions) is associated to a variable
+that contains at least one restrict pointer. This could be a ``struct`` that
+contains one or more restrict member pointers, or an array of restrict pointers.
+
+The intrinsic returns the first argument.
+
+Arguments:
+""""""""""
+
+The first argument ``%p.block`` represents the block that will be copied.
+
+The second argument ``%p.decl`` refers to the ``llvm.noalias.decl`` that is
+associated with the block.
+
+The third argument ``!p.indices`` refers to a metadata list of metadata. Each
+entry refers to another metadata list of integers, describing the GEP path
+that contains a restrict pointer. A -1 value indicates that any index value
+is a match. See above for an example.
+
+Semantics:
+""""""""""
+
+The ``llvm.noalias.copy.guard`` provides extra restrict information about a
+block of memory that is copied over. When the memory copy is optimized away,
+they will still be able to match the pointer access to the correct restrict
+information.
 
 
 General Intrinsics

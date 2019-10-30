@@ -1013,6 +1013,12 @@ static bool isReturnNonNull(Function *F, const SCCNodeSet &SCCNodes,
     case Instruction::Call:
     case Instruction::Invoke: {
       CallSite CS(RVI);
+      if (CS.getIntrinsicID() == Intrinsic::noalias_arg_guard ||
+          CS.getIntrinsicID() == Intrinsic::noalias_copy_guard) {
+        // Look through a noalias arg/copy guard
+        FlowsToReturn.insert(RVI->getOperand(0));
+        continue;
+      }
       Function *Callee = CS.getCalledFunction();
       // A call to a node within the SCC is assumed to return null until
       // proven otherwise

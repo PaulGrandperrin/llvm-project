@@ -1477,6 +1477,8 @@ bool JumpThreadingPass::SimplifyPartiallyRedundantLoad(LoadInst *LoadI) {
     NewVal->setDebugLoc(LoadI->getDebugLoc());
     if (AATags)
       NewVal->setAAMetadata(AATags);
+    // FIXME: not sure if noalias_sidechannel propagation should be allowed
+    // here: dependend side channels should also migrate first !
 
     AvailablePreds.push_back(std::make_pair(UnavailablePred, NewVal));
   }

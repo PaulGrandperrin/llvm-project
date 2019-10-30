@@ -3,6 +3,7 @@ add_llvm_library(LLVMScalarOpts
   AlignmentFromAssumptions.cpp
   BDCE.cpp
   CallSiteSplitting.cpp
+  ConnectNoAliasDecl.cpp
   ConstantHoisting.cpp
   ConstantProp.cpp
   CorrelatedValuePropagation.cpp
@@ -56,6 +57,7 @@ add_llvm_library(LLVMScalarOpts
   NewGVN.cpp
   PartiallyInlineLibCalls.cpp
   PlaceSafepoints.cpp
+  PropagateAndConvertNoAlias.cpp
   Reassociate.cpp
   Reg2Mem.cpp
   RewriteStatepointsForGC.cpp

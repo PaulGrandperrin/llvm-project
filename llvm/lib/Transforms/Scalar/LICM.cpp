@@ -1804,6 +1804,8 @@ public:
       NewSI->setDebugLoc(DL);
       if (AATags)
         NewSI->setAAMetadata(AATags);
+      // FIXME: not sure if noalias_sidechannel propagation should be allowed
+      // here: dependend side channels should also migrate first !
 
       if (MSSAU) {
         MemoryAccess *MSSAInsertPoint = MSSAInsertPts[i];
@@ -1957,7 +1959,9 @@ bool llvm::promoteLoopAccessesToScalars(
     if (SomePtr->getType() != ASIV->getType())
       return false;
 
-    for (User *U : ASIV->users()) {
+    for (auto U_it = ASIV->user_begin(), U_it_end = ASIV->user_end();
+         U_it != U_it_end; ++U_it) {
+      User *U = *U_it;
       // Ignore instructions that are outside the loop.
       Instruction *UI = dyn_cast<Instruction>(U);
       if (!UI || !CurLoop->contains(UI))
@@ -1966,6 +1970,9 @@ bool llvm::promoteLoopAccessesToScalars(
       // If there is an non-load/store instruction in the loop, we can't promote
       // it.
       if (LoadInst *Load = dyn_cast<LoadInst>(UI)) {
+        if (U_it.getUse().getOperandNo() ==
+            Load->getNoaliasSideChannelOperandIndex())
+          continue;
         if (!Load->isUnordered())
           return false;
 
@@ -1988,6 +1995,10 @@ bool llvm::promoteLoopAccessesToScalars(
             Alignment = std::max(Alignment, InstAlignment);
           }
       } else if (const StoreInst *Store = dyn_cast<StoreInst>(UI)) {
+        if (U_it.getUse().getOperandNo() ==
+            Store->getNoaliasSideChannelOperandIndex())
+          continue;
+
         // Stores *of* the pointer are not interesting, only stores *to* the
         // pointer.
         if (UI->getOperand(1) != ASIV)
@@ -2036,8 +2047,18 @@ bool llvm::promoteLoopAccessesToScalars(
               MaybeAlign(Store->getAlignment()), MDL,
               Preheader->getTerminator(), DT);
         }
-      } else
-        return false; // Not a load or store.
+      } else {
+        // Not a load or store.
+        if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(UI)) {
+          if (II->getIntrinsicID() == Intrinsic::side_noalias ||
+              II->getIntrinsicID() == Intrinsic::noalias_arg_guard ||
+              II->getIntrinsicID() == Intrinsic::noalias_copy_guard) {
+            // those must not block promotion.
+            continue;
+          }
+        }
+        return false;
+      }
 
       // Merge the AA tags.
       if (LoopUses.empty()) {
@@ -2123,6 +2144,8 @@ bool llvm::promoteLoopAccessesToScalars(
   PreheaderLoad->setDebugLoc(DL);
   if (AATags)
     PreheaderLoad->setAAMetadata(AATags);
+  // FIXME: not sure if noalias_sidechannel propagation should be allowed
+  // here: dependend side channels should also migrate first !
   SSA.AddAvailableValue(Preheader, PreheaderLoad);
 
   if (MSSAU) {

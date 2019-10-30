@@ -292,6 +292,7 @@ void AliasSetTracker::clear() {
     I->second->eraseFromList();
 
   PointerMap.clear();
+  SideChannelPointers.clear();
 
   // The alias sets should all be clear now.
   AliasSets.clear();
@@ -356,6 +357,10 @@ AliasSet &AliasSetTracker::getAliasSetFor(const MemoryLocation &MemLoc) {
   const AAMDNodes &AAInfo = MemLoc.AATags;
 
   AliasSet::PointerRec &Entry = getEntryFor(Pointer);
+
+  if (AAInfo.NoAliasSideChannel)
+    SideChannelPointers.insert(
+        ASTSideChannelCallbackVH(AAInfo.NoAliasSideChannel, this));
 
   if (AliasAnyAS) {
     // At this point, the AST is saturated, so we only have one active alias
@@ -730,6 +735,65 @@ AliasSetTracker::ASTCallbackVH::ASTCallbackVH(Value *V, AliasSetTracker *ast)
 AliasSetTracker::ASTCallbackVH &
 AliasSetTracker::ASTCallbackVH::operator=(Value *V) {
   return *this = ASTCallbackVH(V, AST);
+}
+
+//===----------------------------------------------------------------------===//
+//                     ASTSideChannelCallbackVH Class Implementation
+//===----------------------------------------------------------------------===//
+
+void AliasSetTracker::ASTSideChannelCallbackVH::deleted() {
+  assert(AST && "ASTCallbackVH called with a null AliasSetTracker!");
+  AST->deleteSideChannelValue(getValPtr());
+  // this now dangles!
+}
+
+void AliasSetTracker::ASTSideChannelCallbackVH::allUsesReplacedWith(Value *V) {
+  AST->copySideChannelValue(getValPtr(), V);
+}
+
+AliasSetTracker::ASTSideChannelCallbackVH::ASTSideChannelCallbackVH(
+    Value *V, AliasSetTracker *ast)
+    : CallbackVH(V), AST(ast) {}
+
+AliasSetTracker::ASTSideChannelCallbackVH &
+AliasSetTracker::ASTSideChannelCallbackVH::operator=(Value *V) {
+  return *this = ASTSideChannelCallbackVH(V, AST);
+}
+
+void AliasSetTracker::deleteSideChannelValue(Value *PtrVal) {
+  // FIXME: slow algorithms ahead
+  SideChannelSetType::iterator I = SideChannelPointers.find_as(PtrVal);
+  if (I == SideChannelPointers.end())
+    return; // nope
+
+  // iterate over all PointerRecords to update the AAMDNodes that contain this
+  // pointer
+  for (auto &AS : *this) {
+    for (auto &PR : AS) {
+      PR.updateNoAliasSideChannelIfMatching(PtrVal, nullptr);
+    }
+  }
+
+  SideChannelPointers.erase(I);
+}
+
+void AliasSetTracker::copySideChannelValue(Value *From, Value *To) {
+  // FIXME: slow algorithms ahead
+  SideChannelSetType::iterator I = SideChannelPointers.find_as(From);
+  if (I == SideChannelPointers.end())
+    return; // nope
+
+  // iterate over all PointerRecords to update the AAMDNodes that contain this
+  // pointer
+  for (auto &AS : *this) {
+    for (auto &PR : AS) {
+      PR.updateNoAliasSideChannelIfMatching(From, To);
+    }
+  }
+
+  // Update the set
+  SideChannelPointers.erase(I);
+  SideChannelPointers.insert(ASTSideChannelCallbackVH(To, this));
 }
 
 //===----------------------------------------------------------------------===//

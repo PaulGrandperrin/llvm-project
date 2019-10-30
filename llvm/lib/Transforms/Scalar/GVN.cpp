@@ -1252,6 +1252,8 @@ bool GVN::PerformLoadPRE(LoadInst *LI, AvailValInBlkVect &ValuesPerBlock,
     LI->getAAMetadata(Tags);
     if (Tags)
       NewLoad->setAAMetadata(Tags);
+    // FIXME: not sure if noalias_sidechannel propagation should be allowed
+    // here: dependend side channels should also migrate first !
 
     if (auto *MD = LI->getMetadata(LLVMContext::MD_invariant_load))
       NewLoad->setMetadata(LLVMContext::MD_invariant_load, MD);

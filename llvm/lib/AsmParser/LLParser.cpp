@@ -2123,20 +2123,45 @@ bool LLParser::ParseOptionalDerefAttrBytes(lltok::Kind AttrKind,
 /// end.
 bool LLParser::ParseOptionalCommaAlign(MaybeAlign &Alignment,
                                        bool &AteExtraComma) {
-  AteExtraComma = false;
-  while (EatIfPresent(lltok::comma)) {
+  while (AteExtraComma || EatIfPresent(lltok::comma)) {
+    AteExtraComma = false;
     // Metadata at the end is an early exit.
     if (Lex.getKind() == lltok::MetadataVar) {
       AteExtraComma = true;
       return false;
     }
 
-    if (Lex.getKind() != lltok::kw_align)
+    // if we get here, noalias_sidechannel must not be possible any more
+    if (Lex.getKind() == lltok::kw_noalias_sidechannel)
       return Error(Lex.getLoc(), "expected metadata or 'align'");
+    if (Lex.getKind() != lltok::kw_align)
+      return Error(Lex.getLoc(),
+                   "expected metadata or 'align' or 'noalias_sidechannel'");
 
     if (ParseOptionalAlignment(Alignment)) return true;
   }
 
+  return false;
+}
+
+/// ParseOptionalCommandNoaliasSideChannel
+///   ::=
+///   ::= ',' noalias_sidechannel int* %3
+///
+/// This returns with AteExtraComma set to true if it ate an excess comma at the
+/// end.
+bool LLParser::ParseOptionalCommaNoaliasSideChannel(
+    Value *&V, LLParser::LocTy &Loc, LLParser::PerFunctionState &PFS,
+    bool &AteExtraComma) {
+  assert(AteExtraComma == false);
+  if (EatIfPresent(lltok::comma)) {
+    if (Lex.getKind() == lltok::kw_noalias_sidechannel) {
+      Lex.Lex();
+      return ParseTypeAndValue(V, Loc, PFS);
+    }
+
+    AteExtraComma = true;
+  }
   return false;
 }
 
@@ -6932,6 +6957,8 @@ int LLParser::ParseAlloc(Instruction *&Inst, PerFunctionState &PFS) {
 ///       'singlethread'? AtomicOrdering (',' 'align' i32)?
 int LLParser::ParseLoad(Instruction *&Inst, PerFunctionState &PFS) {
   Value *Val; LocTy Loc;
+  Value *NoaliasSideChannel = nullptr;
+  LocTy NoaliasSideChannelLoc;
   MaybeAlign Alignment;
   bool AteExtraComma = false;
   bool isAtomic = false;
@@ -6954,6 +6981,8 @@ int LLParser::ParseLoad(Instruction *&Inst, PerFunctionState &PFS) {
   if (ParseType(Ty) ||
       ParseToken(lltok::comma, "expected comma after load's type") ||
       ParseTypeAndValue(Val, Loc, PFS) ||
+      ParseOptionalCommaNoaliasSideChannel(
+          NoaliasSideChannel, NoaliasSideChannelLoc, PFS, AteExtraComma) ||
       ParseScopeAndOrdering(isAtomic, SSID, Ordering) ||
       ParseOptionalCommaAlign(Alignment, AteExtraComma))
     return true;
@@ -6970,7 +6999,10 @@ int LLParser::ParseLoad(Instruction *&Inst, PerFunctionState &PFS) {
     return Error(ExplicitTypeLoc,
                  "explicit pointee type doesn't match operand's pointee type");
 
-  Inst = new LoadInst(Ty, Val, "", isVolatile, Alignment, Ordering, SSID);
+  auto *LI = new LoadInst(Ty, Val, "", isVolatile, Alignment, Ordering, SSID);
+  if (NoaliasSideChannel)
+    LI->setNoaliasSideChannelOperand(NoaliasSideChannel);
+  Inst = LI;
   return AteExtraComma ? InstExtraComma : InstNormal;
 }
 
@@ -6981,6 +7013,8 @@ int LLParser::ParseLoad(Instruction *&Inst, PerFunctionState &PFS) {
 ///       'singlethread'? AtomicOrdering (',' 'align' i32)?
 int LLParser::ParseStore(Instruction *&Inst, PerFunctionState &PFS) {
   Value *Val, *Ptr; LocTy Loc, PtrLoc;
+  Value *NoaliasSideChannel = nullptr;
+  LocTy NoaliasSideChannelLoc;
   MaybeAlign Alignment;
   bool AteExtraComma = false;
   bool isAtomic = false;
@@ -7001,6 +7035,8 @@ int LLParser::ParseStore(Instruction *&Inst, PerFunctionState &PFS) {
   if (ParseTypeAndValue(Val, Loc, PFS) ||
       ParseToken(lltok::comma, "expected ',' after store operand") ||
       ParseTypeAndValue(Ptr, PtrLoc, PFS) ||
+      ParseOptionalCommaNoaliasSideChannel(
+          NoaliasSideChannel, NoaliasSideChannelLoc, PFS, AteExtraComma) ||
       ParseScopeAndOrdering(isAtomic, SSID, Ordering) ||
       ParseOptionalCommaAlign(Alignment, AteExtraComma))
     return true;
@@ -7017,7 +7053,11 @@ int LLParser::ParseStore(Instruction *&Inst, PerFunctionState &PFS) {
       Ordering == AtomicOrdering::AcquireRelease)
     return Error(Loc, "atomic store cannot use Acquire ordering");
 
-  Inst = new StoreInst(Val, Ptr, isVolatile, Alignment, Ordering, SSID);
+  auto *SI = new StoreInst(Val, Ptr, isVolatile, Alignment, Ordering, SSID);
+  if (NoaliasSideChannel)
+    SI->setNoaliasSideChannelOperand(NoaliasSideChannel);
+  Inst = SI;
+
   return AteExtraComma ? InstExtraComma : InstNormal;
 }
 

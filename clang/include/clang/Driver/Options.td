@@ -952,6 +952,15 @@ def ffixed_point : Flag<["-"], "ffixed-point">, Group<f_Group>,
                    Flags<[CC1Option]>, HelpText<"Enable fixed point types">;
 def fno_fixed_point : Flag<["-"], "fno-fixed-point">, Group<f_Group>,
                       HelpText<"Disable fixed point types">;
+def ffull_restrict : Flag<["-"], "ffull-restrict">, Group<f_Group>,
+  Flags<[CoreOption, CC1Option]>,
+  HelpText<"Enable full restrict support">;
+def fno_full_restrict : Flag<["-"], "fno-full-restrict">, Group<f_Group>,
+  Flags<[CoreOption, CC1Option]>,
+  HelpText<"Disable full restrict support, falling back to the legacy support">;
+def fno_noalias_arguments : Flag<["-"], "fno-noalias-arguments">,
+  Group<f_Group>, Flags<[CoreOption, CC1Option]>,
+  HelpText<"Do not map restrict arguments onto noalias attribute">;
 def fcxx_static_destructors : Flag<["-"], "fc++-static-destructors">,
   Group<f_Group>,
   HelpText<"Enable C++ static destructor registration (the default)">;
